@@ -1,4 +1,4 @@
-#include <arpa/inet.h> // Include this for byte order conversion
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +15,9 @@ struct HeaderContent {
 };
 
 void reverse_audio_data(char *audio_data, int length) {
+  // In-Place Änderung des Arrays
+  // Neues Array nicht notwendig, da es
+  // das bestehende Array verändert
   for (int i = 0; i < length / 2; i++) {
     char temp = audio_data[i];
     audio_data[i] = audio_data[length - i - 1];
@@ -22,9 +25,20 @@ void reverse_audio_data(char *audio_data, int length) {
   }
 }
 
+void convert_back_to_big_endian(struct HeaderContent *header) {
+  // be32toh nicht verfügbar in clang 15? weiß nicht wieso
+  //
+  header->data_offset = htonl(header->data_offset);
+  header->audio_length = htonl(header->audio_length);
+  header->encoding_audio = htonl(header->encoding_audio);
+  header->sample_rate = htonl(header->sample_rate);
+  header->audio_channels = htonl(header->audio_channels);
+}
+
 int main(int argc, char *argv[]) {
 
   const char *file_extension = strrchr(argv[1], '.');
+
   // Input validieren
   if (argc < 2) {
     printf("Please parse the file path as a command line argument.");
@@ -37,7 +51,7 @@ int main(int argc, char *argv[]) {
   // File namen auslesen
   char *input = argv[1];
 
-  int fd = open(input, O_RDONLY, O_CREAT | O_EXCL);
+  int fd = open(input, O_RDONLY);
 
   if (fd < 0) {
     perror("Error opening file");
@@ -47,19 +61,17 @@ int main(int argc, char *argv[]) {
   // Status: Loaded into memory
   // Header
   struct HeaderContent header_of_au;
-  ssize_t bytes_to_read = read(fd, &header_of_au, 24);
+  ssize_t bytes_to_read =
+      read(fd, &header_of_au, sizeof(struct HeaderContent)); // War 24 hier
 
-  if (bytes_to_read != 24) {
+  if (bytes_to_read != sizeof(struct HeaderContent)) {
     perror("Error reading header");
     close(fd);
+    return 1;
   }
 
   // Big endian to little endian
-  // be32toh nicht verfügbar in little endian
-  header_of_au.audio_channels = ntohl(header_of_au.audio_channels);
-  header_of_au.sample_rate = ntohl(header_of_au.sample_rate);
-  header_of_au.encoding_audio = ntohl(header_of_au.encoding_audio);
-  header_of_au.audio_length = ntohl(header_of_au.audio_length);
+  convert_back_to_big_endian(&header_of_au);
 
   // number of channels
   printf("Number of channels: %d\n", header_of_au.audio_channels);
@@ -74,12 +86,14 @@ int main(int argc, char *argv[]) {
   // -rev file
   // "-rev\0" daher + 5
   char *output = (char *)malloc(strlen(input) + 5);
+
   if (output == NULL) {
     perror("Error allocating memory for output");
     close(fd);
     return 1;
   }
 
+  // Hinzufügen von -rev
   sprintf(output, "%.*s-rev.au", (int)(strrchr(input, '.') - input), input);
 
   // neue file erstellen
@@ -92,8 +106,11 @@ int main(int argc, char *argv[]) {
   }
 
   // Write the header to the new file
+  // vorher zurück zu big endian
+  struct HeaderContent big_endian_header = header_of_au;
+  convert_back_to_big_endian(&big_endian_header);
   ssize_t header_bytes_written =
-      write(fd_out, &header_of_au, sizeof(struct HeaderContent));
+      write(fd_out, &big_endian_header, sizeof(struct HeaderContent));
   if (header_bytes_written != sizeof(struct HeaderContent)) {
     perror("Error writing header");
     free(output);
@@ -101,46 +118,73 @@ int main(int argc, char *argv[]) {
     close(fd_out);
     return 1;
   }
-  // if mono, reverse audio
-  if (header_of_au.audio_channels == 1) {
-    char *audio_data = (char *)malloc(header_of_au.audio_length);
 
-    if (audio_data == NULL) {
-      perror("Error allocating memory");
-      close(fd);
-      return 1;
-    }
+  char *audio_data = (char *)malloc(header_of_au.audio_length);
 
-    ssize_t audio_bytes_read = read(fd, audio_data, header_of_au.audio_length);
-    if (audio_bytes_read != header_of_au.audio_length) {
-      perror("Error reading audio data. Leength does not match.");
-      free(audio_data);
-      close(fd);
-      return 1;
-    }
-
-    // Audio umdrehen
-    reverse_audio_data(audio_data, header_of_au.audio_length);
-
-    // schreiben in die neue File
-    ssize_t audio_bytes_written =
-        write(fd_out, audio_data, header_of_au.audio_length);
-    if (audio_bytes_written != header_of_au.audio_length) {
-      perror("Error writing reversed audio data");
-      free(audio_data);
-      free(output);
-      close(fd);
-      close(fd_out);
-      return 1;
-    }
-    free(audio_data);
-    free(output);
-    close(fd_out);
-
-    printf("Audio data reversed and saved to %s.\n", output);
+  if (audio_data == NULL) {
+    perror("Error allocating memory");
+    close(fd);
+    return 1;
   }
 
+  ssize_t audio_bytes_read = read(fd, audio_data, header_of_au.audio_length);
+  if (audio_bytes_read != header_of_au.audio_length) {
+    perror("Error reading audio data. Leength does not match.");
+    free(audio_data);
+    close(fd);
+    return 1;
+  }
+
+  // Falls schon reversed
+  // Header checken
+  int already_reversed = 0;
+  char *rev_pos = strstr(input, "-rev");
+
+  if (rev_pos && rev_pos < file_extension) {
+    already_reversed = 1;
+  }
+  struct HeaderContent write_header = header_of_au;
+  if (!already_reversed) {
+    convert_back_to_big_endian(&write_header);
+  }
+
+  // Debug: Print first few bytes before reversing
+  /*
+  for (int i = 0; i < 10 && i < header_of_au.audio_length; i++) {
+    printf("%x ", audio_data[i] & 0xFF);
+  }*/
+  // printf("\n");
+
+  // if mono, reverse audio
+  if (header_of_au.audio_channels == 1) {
+    reverse_audio_data(audio_data, header_of_au.audio_length);
+  }
+  // Debug: Print first few bytes after reversing
+  /*
+  for (int i = 0; i < 10 && i < header_of_au.audio_length; i++) {
+    printf("%x ", audio_data[i] & 0xFF);
+  }*/
+
+  // printf("\n");
+  // schreiben der Audio Daten in die neue File
+  ssize_t audio_bytes_written =
+      write(fd_out, audio_data, header_of_au.audio_length);
+  if (audio_bytes_written != header_of_au.audio_length) {
+    perror("Error writing reversed audio data");
+    free(audio_data);
+    free(output);
+    close(fd);
+    close(fd_out);
+    return 1;
+  }
+
+  printf("Audio data %s and saved to %s.\n",
+         already_reversed ? "restored" : "reversed", output);
+
+  free(audio_data);
+  free(output);
   close(fd);
+  close(fd_out);
 
   return 0;
 }
