@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+// #include <sys/endian.h> // geht nicht unter MacOS?
 #include <sys/stat.h>
 #include <unistd.h>
 struct HeaderContent {
@@ -17,7 +18,7 @@ struct HeaderContent {
 void reverse_audio_data(char *audio_data, int length) {
   // In-Place Änderung des Arrays
   // Neues Array nicht notwendig, da es
-  // das bestehende Array verändert
+  // das bestehende Array verändert // geht nicht unter MacOS?
   for (int i = 0; i < length / 2; i++) {
     char temp = audio_data[i];
     audio_data[i] = audio_data[length - i - 1];
@@ -27,7 +28,6 @@ void reverse_audio_data(char *audio_data, int length) {
 
 void convert_back_to_big_endian(struct HeaderContent *header) {
   // be32toh nicht verfügbar in clang 15? weiß nicht wieso
-  //
   header->data_offset = htonl(header->data_offset);
   header->audio_length = htonl(header->audio_length);
   header->encoding_audio = htonl(header->encoding_audio);
@@ -119,6 +119,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  // Neue File groß genug machen
   char *audio_data = (char *)malloc(header_of_au.audio_length);
 
   if (audio_data == NULL) {
