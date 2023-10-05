@@ -1,4 +1,3 @@
-#include <arpa/inet.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +5,7 @@
 // #include <sys/endian.h> // geht nicht unter MacOS?
 #include <sys/stat.h>
 #include <unistd.h>
+
 struct HeaderContent {
   char magic[4];          // ASCII ".snd"
   int32_t data_offset;    // 24 Bytes
@@ -85,6 +85,7 @@ int main(int argc, char *argv[]) {
 
   // -rev file
   // "-rev\0" daher + 5
+  // Malloc returns a void pointer
   char *output = (char *)malloc(strlen(input) + 5);
 
   if (output == NULL) {
@@ -149,24 +150,11 @@ int main(int argc, char *argv[]) {
     convert_back_to_big_endian(&write_header);
   }
 
-  // Debug: Print first few bytes before reversing
-  /*
-  for (int i = 0; i < 10 && i < header_of_au.audio_length; i++) {
-    printf("%x ", audio_data[i] & 0xFF);
-  }*/
-  // printf("\n");
-
   // if mono, reverse audio
   if (header_of_au.audio_channels == 1) {
     reverse_audio_data(audio_data, header_of_au.audio_length);
   }
-  // Debug: Print first few bytes after reversing
-  /*
-  for (int i = 0; i < 10 && i < header_of_au.audio_length; i++) {
-    printf("%x ", audio_data[i] & 0xFF);
-  }*/
 
-  // printf("\n");
   // schreiben der Audio Daten in die neue File
   ssize_t audio_bytes_written =
       write(fd_out, audio_data, header_of_au.audio_length);
